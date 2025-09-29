@@ -1,0 +1,195 @@
+import soundfile as sf
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks, peak_widths
+
+
+def read_audio(filename):
+    """Legge un file audio e lo converte in mono se necessario."""
+    data, samplerate = sf.read(filename)
+    # Estrai solo il primo canale se il file è stereo
+    if data.ndim > 1:
+        mono = data[:, 0]
+    else:
+        mono = data
+    return data, mono, samplerate
+
+
+def plot_waveform(audio, samplerate, title='Waveform (1° canale)'):
+    """Visualizza la forma d'onda del segnale audio."""
+    time = np.arange(len(audio)) / samplerate
+    plt.figure(figsize=(10, 4))
+    plt.plot(time, audio)
+    plt.title(title)
+    plt.xlabel('Tempo [s]')
+    plt.ylabel('Ampiezza')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def compute_fft(audio, samplerate):
+    """Calcola la FFT e le relative componenti."""
+    fft_result = np.fft.fft(audio)
+    fft_freq = np.fft.fftfreq(len(audio), d=1/samplerate)
+    
+    # Calcola potenza, parte reale e immaginaria
+    power = np.abs(fft_result)**2
+    real = np.real(fft_result)
+    imag = np.imag(fft_result)
+    
+    # Solo metà dello spettro (frequenze positive)
+    half_freqs = fft_freq[:len(fft_freq)//2]
+    half_power = power[:len(power)//2]
+    half_real = real[:len(real)//2]
+    half_imag = imag[:len(imag)//2]
+    
+    return fft_result, fft_freq, half_freqs, half_power, half_real, half_imag
+
+
+def plot_power_spectrum(freqs, power, title='Spettro di Potenza (FFT)'):
+    """Visualizza lo spettro di potenza."""
+    plt.figure(figsize=(10, 4))
+    plt.plot(freqs, power)
+    plt.title(title)
+    plt.xlabel('Frequenza [Hz]')
+    plt.ylabel('Potenza')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_real_imag(freqs, real, imag):
+    """Visualizza la parte reale e immaginaria della FFT."""
+    plt.figure(figsize=(10, 4))
+    plt.plot(freqs, real, label='Parte reale')
+    plt.plot(freqs, imag, label='Parte immaginaria', linestyle='dashed')
+    plt.title('Parte Reale e Immaginaria della FFT')
+    plt.xlabel('Frequenza [Hz]')
+    plt.ylabel('Ampiezza')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def find_peak_info(freqs, power):
+    """Trova informazioni sui picchi principali nello spettro."""
+    # Trova i picchi sopra una certa soglia
+    peaks, _ = find_peaks(power, height=np.max(power)*0.1, distance=20)
+    
+    # Frequenze dei picchi
+    peak_freqs = freqs[peaks]
+    peak_powers = power[peaks]
+    
+    # Picco principale
+    main_peak_idx = np.argmax(peak_powers)
+    main_freq = peak_freqs[main_peak_idx]
+    
+    # Calcola la larghezza del picco
+    results_half = peak_widths(power, peaks, rel_height=0.5)
+    bin_width = freqs[1] - freqs[0]
+    main_width_hz = results_half[0][main_peak_idx] * bin_width
+    
+    # Range min-max del picco principale
+    left_idx = int(results_half[2][main_peak_idx])
+    right_idx = int(results_half[3][main_peak_idx])
+    min_freq = freqs[left_idx]
+    max_freq = freqs[right_idx]
+    
+    # Secondo picco (se esiste)
+    second_freq = None
+    if len(peak_freqs) > 1:
+        second_idx = np.argsort(peak_powers)[-2]
+        second_freq = peak_freqs[second_idx]
+    
+    return main_freq, second_freq, peaks, min_freq, max_freq, main_width_hz, main_peak_idx, results_half
+
+
+def freq_to_note(freq):
+    """Converte una frequenza in nota musicale."""
+    if freq == 0:
+        return "N/A"
+    A4 = 440.0
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    n = round(12 * np.log2(freq / A4))
+    note_index = (n + 9) % 12  # A4 = index 9
+    octave = 4 + (n + 9) // 12
+    return f"{note_names[note_index]}{octave}"
+
+
+def filter_frequency(fft_result, main_freq, samplerate, width_bins=5):
+    """Filtra il segnale FFT mantenendo solo il picco principale."""
+    # Converti frequenza in indice nella FFT
+    freq_resolution = samplerate / len(fft_result)
+    main_idx = int(np.round(main_freq / freq_resolution))
+    
+    # Crea una maschera: finestra attorno al picco
+    mask = np.zeros_like(fft_result, dtype=bool)
+    mask[main_idx - width_bins : main_idx + width_bins + 1] = True
+    # Per simmetria (per garantire segnale reale) considera anche la parte negativa
+    mask[-main_idx - width_bins : -main_idx + width_bins + 1] = True
+    
+    # Applica la maschera
+    filtered_fft = np.zeros_like(fft_result, dtype=complex)
+    filtered_fft[mask] = fft_result[mask]
+    
+    # Trasformata inversa (IFFT)
+    filtered_signal = np.fft.ifft(filtered_fft).real
+    
+    return filtered_signal
+
+
+def main():
+    # 1. Leggi il file audio
+    filename = 'diapason.wav'
+    data, mono, samplerate = read_audio(filename)
+    
+    # 2. Visualizza la forma d'onda
+    plot_waveform(mono, samplerate)
+    
+    # 3. Scrivi un nuovo file .wav identico
+    sf.write('output.wav', data, samplerate)
+    print("Nuovo file scritto come 'output.wav'.")
+    
+    # 4. Calcola FFT
+    fft_result, fft_freq, half_freqs, half_power, half_real, half_imag = compute_fft(mono, samplerate)
+    
+    # 5. Visualizza spettro di potenza
+    plot_power_spectrum(half_freqs, half_power)
+    
+    # 6. Visualizza parte reale e immaginaria
+    plot_real_imag(half_freqs, half_real, half_imag)
+    
+    # 7. Trova e analizza i picchi
+    main_freq, second_freq, peaks, min_freq, max_freq, main_width_hz, main_peak_idx, results_half = find_peak_info(half_freqs, half_power)
+    
+    # 8. Stampa informazioni sui picchi
+    print(f"🎯 Frequenza principale: {main_freq:.2f} Hz")
+    
+    # 9. Picco secondario (se esiste)
+    if second_freq:
+        print(f"🎵 Picco secondario: {second_freq:.2f} Hz")
+    
+    # 10. Converti frequenza in nota musicale
+    main_note = freq_to_note(main_freq)
+    print(f"📝 Nota corrispondente al picco principale: {main_note}")
+    
+    if second_freq:
+        second_note = freq_to_note(second_freq)
+        print(f"📝 Nota secondaria (facoltativa): {second_note}")
+    
+    # 11. Larghezza del picco e range
+    print(f"📏 Larghezza del picco principale: {main_width_hz:.2f} Hz")
+    print(f"📊 Range di frequenze del picco principale: {min_freq:.2f} Hz – {max_freq:.2f} Hz")
+    
+    # 12. Filtra il segnale per mantenere solo il picco principale
+    filtered_signal = filter_frequency(fft_result, main_freq, samplerate)
+    
+    # 13. Salva il nuovo audio
+    sf.write("solo_picco_principale.wav", filtered_signal, samplerate)
+    print("✅ File 'solo_picco_principale.wav' creato con solo la frequenza dominante.")
+
+
+if __name__ == "__main__":
+    main()
